@@ -7,6 +7,8 @@ import java.time.LocalDate
  * Columns: isbn, title, title_lang, authors (separated by ";"), publisher, language, price, condition, published, section, qty, cost.
  */
 object Csv {
+    private val NUMBER = Regex("-?\\d+(\\.\\d+)?")
+
     val HEADER = listOf("isbn", "title", "title_lang", "authors", "publisher", "language", "price", "condition", "published", "section", "qty", "cost")
 
     fun parse(text: String): List<List<String>> {
@@ -37,7 +39,8 @@ object Csv {
 
     /** Spreadsheet programs run cells that start with = + - @; a leading apostrophe keeps them as text. */
     fun cell(v: String): String {
-        val safe = if (v.isNotEmpty() && v[0] in "=+-@\t\r") "'$v" else v
+        // A plain number (a refund is negative) cannot be a formula and must stay a number.
+        val safe = if (v.isNotEmpty() && v[0] in "=+-@\t\r" && !NUMBER.matches(v)) "'$v" else v
         return if (safe.any { it in ",\"\n\r" }) "\"" + safe.replace("\"", "\"\"") + "\"" else safe
     }
 
@@ -58,7 +61,44 @@ object Csv {
         return sb.toString()
     }
 
-    private fun plain(minor: Long, c: Currency) = if (c.digits == 0) minor.toString() else "%d.%02d".format(minor / 100, minor % 100)
+    fun plain(minor: Long, c: Currency): String {
+        if (c.digits == 0) return minor.toString()
+        val a = Math.abs(minor)
+        return (if (minor < 0) "-" else "") + "%d.%02d".format(a / 100, a % 100)
+    }
+
+    private fun rows(header: List<String>, body: List<List<String>>): String {
+        val sb = StringBuilder("\uFEFF")
+        sb.append(header.joinToString(",")).append("\r\n")
+        for (r in body) sb.append(r.joinToString(",") { cell(it) }).append("\r\n")
+        return sb.toString()
+    }
+
+    /**
+     * The sales ledger for the accountant: one row per receipt and tax rate, refunds as negative rows on
+     * the day they happened. Amounts are tax included (gross), with the tax and the net beside them.
+     */
+    fun ledger(shop: Shop, from: LocalDate, to: LocalDate): String {
+        val c = shop.settings.market.currency
+        return rows(
+            listOf("date", "type", "receipt", "payment", "tax_rate", "gross", "tax", "net", "currency"),
+            Reports(shop).ledger(from, to).map {
+                listOf(it.date.toString(), it.type, it.receipt, it.method, "%d.%02d".format(it.rateBp / 100, it.rateBp % 100), plain(it.gross, c), plain(it.tax, c), plain(it.net, c), c.name)
+            },
+        )
+    }
+
+    /** Deliveries and returns to suppliers, to check against their invoices and credit notes. */
+    fun purchases(shop: Shop, from: LocalDate, to: LocalDate): String {
+        val c = shop.settings.market.currency
+        return rows(
+            listOf("date", "type", "document", "supplier", "isbn", "title", "qty", "unit_cost", "total", "currency"),
+            Reports(shop).purchases(from, to).map {
+                listOf(it.date.toString(), it.type, it.doc, shop.suppliers[it.supplier]?.name ?: it.supplier, it.isbn, shop.books[it.isbn]?.title("en") ?: "",
+                    it.qty.toString(), plain(it.unitCost, c), plain(it.total, c), c.name)
+            },
+        )
+    }
 
     data class Report(val added: Int, val received: Long, val errors: List<String>)
 

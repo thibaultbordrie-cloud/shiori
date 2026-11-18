@@ -74,4 +74,50 @@ class Reports(private val shop: Shop) {
         }
         return net to cost
     }
+
+    // ---------- for the accountant ----------
+
+    /** One line per receipt and tax rate. A refund is a negative line on the day it happened, so a closed day never changes. */
+    data class LedgerLine(val date: LocalDate, val type: String, val receipt: String, val method: String, val rateBp: Int, val gross: Long, val tax: Long) {
+        val net: Long get() = gross - tax
+    }
+
+    fun ledger(from: LocalDate, to: LocalDate): List<LedgerLine> {
+        fun inside(at: Instant) = at.atZone(zone).toLocalDate().let { !it.isBefore(from) && !it.isAfter(to) }
+        val out = ArrayList<LedgerLine>()
+        for (s in shop.sales) {
+            if (inside(s.at)) for ((bp, g, t) in s.byRate()) out += LedgerLine(s.at.atZone(zone).toLocalDate(), "sale", s.id, s.method, bp, g, t)
+            val r = s.refundedAt
+            if (r != null && inside(r)) for ((bp, g, t) in s.byRate()) out += LedgerLine(r.atZone(zone).toLocalDate(), "refund", s.id, s.method, bp, -g, -t)
+        }
+        return out.sortedWith(compareBy<LedgerLine> { it.date }.thenBy { it.receipt }.thenBy { it.type }.thenByDescending { it.rateBp })
+    }
+
+    /** The end-of-day summary (Z report): totals by payment method and by tax rate, refunds included. */
+    data class Closing(val date: LocalDate, val sales: Int, val refunds: Int, val byMethod: Map<String, Long>, val byRate: Map<Int, Pair<Long, Long>>) {
+        val total: Long get() = byMethod.values.sum()
+    }
+
+    fun closing(day: LocalDate): Closing {
+        val es = ledger(day, day)
+        return Closing(
+            day, es.filter { it.type == "sale" }.map { it.receipt }.distinct().size, es.filter { it.type == "refund" }.map { it.receipt }.distinct().size,
+            es.groupBy { it.method }.mapValues { e -> e.value.sumOf { it.gross } }.toSortedMap(),
+            es.groupBy { it.rateBp }.mapValues { e -> e.value.sumOf { it.gross } to e.value.sumOf { it.tax } }.toSortedMap(compareByDescending { it }),
+        )
+    }
+
+    /** Deliveries and returns to suppliers over the period: what the shop owes and what it is owed. */
+    data class Purchase(val date: LocalDate, val type: String, val doc: String, val supplier: String, val isbn: String, val qty: Long, val unitCost: Long) {
+        val total: Long get() = qty * unitCost
+    }
+
+    fun purchases(from: LocalDate, to: LocalDate): List<Purchase> {
+        fun day(at: Instant) = at.atZone(zone).toLocalDate()
+        fun inside(d: LocalDate) = !d.isBefore(from) && !d.isAfter(to)
+        val out = ArrayList<Purchase>()
+        for (d in shop.deliveries) day(d.at).let { if (inside(it)) out += Purchase(it, "delivery", d.po ?: "", d.supplier, d.isbn, d.qty, d.cost) }
+        for (r in shop.returns.values) day(r.at).let { if (inside(it)) for (l in r.lines) out += Purchase(it, "return", r.id, r.supplier, l.isbn, -l.qty, l.cost) }
+        return out.sortedWith(compareBy<Purchase> { it.date }.thenBy { it.type }.thenBy { it.doc })
+    }
 }

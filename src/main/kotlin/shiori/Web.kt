@@ -17,7 +17,13 @@ import java.util.concurrent.Executors
  * forms only. Every change goes through a POST with a per-session token; every page sends a
  * strict Content-Security-Policy.
  */
-class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lookup) {
+class Web(
+    internal val shop: Shop,
+    private val auth: Auth,
+    private val lookup: Lookup,
+    internal val customers: Customers,
+    internal val count: CountDraft,
+) {
     private lateinit var server: HttpServer
     private val allowedHosts = HashSet<String>()
 
@@ -41,14 +47,14 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
 
     // ---------- plumbing ----------
 
-    private class Req(
+    internal class Req(
         val method: String, val path: String, val query: Map<String, String>, val form: Map<String, String>,
         val cookies: Map<String, String>, var lang: String, val session: Auth.Session?, val sid: String?,
     )
 
-    private class Res(val status: Int, val body: ByteArray, val type: String = "text/html; charset=utf-8", val headers: Map<String, String> = emptyMap())
+    internal class Res(val status: Int, val body: ByteArray, val type: String = "text/html; charset=utf-8", val headers: Map<String, String> = emptyMap())
 
-    private class Halt(val res: Res) : RuntimeException()
+    internal class Halt(val res: Res) : RuntimeException()
 
     private fun handle(ex: HttpExchange) {
         val res = try {
@@ -125,6 +131,13 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
             seg.firstOrNull() == "books" -> books(r, seg.drop(1))
             seg.firstOrNull() == "sell" -> sell(r, seg.drop(1))
             seg.firstOrNull() == "sales" -> sales(r, seg.drop(1))
+            seg.firstOrNull() == "orders" -> orders(r, seg.drop(1))
+            seg.firstOrNull() == "buy" -> buy(r, seg.drop(1))
+            seg.firstOrNull() == "count" -> count(r, seg.drop(1))
+            method == "GET" && path == "/reports/day" -> closing(r)
+            method == "GET" && path == "/export/ledger.csv" -> exportLedger(r)
+            method == "GET" && path == "/export/purchases.csv" -> exportPurchases(r)
+            method == "POST" && path == "/settings/forget" -> forgetCustomers(r)
             method == "GET" && path == "/reports" -> reports(r)
             method == "GET" && path == "/export/catalog.csv" ->
                 Res(200, Csv.export(shop, r.lang).toByteArray(), "text/csv; charset=utf-8", mapOf("Content-Disposition" to "attachment; filename=\"shiori-catalogue.csv\""))
@@ -133,23 +146,23 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         }
     }
 
-    private fun t(r: Req, key: String, vararg a: Any) = I18n.t(r.lang, key, *a)
-    private fun money(v: Long) = shop.settings.market.currency.format(v)
-    private fun err(r: Req, e: ShopError) = t(r, e.key, *e.args)
+    internal fun t(r: Req, key: String, vararg a: Any) = I18n.t(r.lang, key, *a)
+    internal fun money(v: Long) = shop.settings.market.currency.format(v)
+    internal fun err(r: Req, e: ShopError) = t(r, e.key, *e.args)
 
     private fun cookie(name: String, value: String, maxAge: Int?) =
         "Set-Cookie" to "$name=$value; Path=/; HttpOnly; SameSite=Strict" + (maxAge?.let { "; Max-Age=$it" } ?: "")
 
-    private fun redirect(to: String, vararg headers: Pair<String, String>) = Res(303, ByteArray(0), headers = mapOf("Location" to to) + headers)
+    internal fun redirect(to: String, vararg headers: Pair<String, String>) = Res(303, ByteArray(0), headers = mapOf("Location" to to) + headers)
 
-    private fun enc(s: String) = URLEncoder.encode(s, UTF_8)
+    internal fun enc(s: String) = URLEncoder.encode(s, UTF_8)
 
-    private fun dateTime(r: Req, at: java.time.Instant): String =
+    internal fun dateTime(r: Req, at: java.time.Instant): String =
         DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT).withLocale(Locale.forLanguageTag(r.lang)).format(at.atZone(shop.settings.zoneId))
 
-    private fun date(r: Req, d: LocalDate): String = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.forLanguageTag(r.lang)).format(d)
+    internal fun date(r: Req, d: LocalDate): String = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.forLanguageTag(r.lang)).format(d)
 
-    private fun page(r: Req, title: String, active: String?, status: Int = 200, body: Html.() -> Unit): Res {
+    internal fun page(r: Req, title: String, active: String?, status: Int = 200, body: Html.() -> Unit): Res {
         val h = Html()
         h.raw("<!doctype html>")
         h.tag("html", "lang" to r.lang) {
@@ -165,7 +178,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
                     tag("a", "class" to "brand", "href" to "/") { +"栞 Shiori · ${shop.settings.name}" }
                     if (r.session != null) {
                         tag("nav", "aria-label" to "Shiori") {
-                            for ((key, href) in listOf("home" to "/", "books" to "/books", "sell" to "/sell", "sales" to "/sales", "reports" to "/reports", "settings" to "/settings")) {
+                            for ((key, href) in listOf("home" to "/", "books" to "/books", "sell" to "/sell", "orders" to "/orders", "buy" to "/buy", "sales" to "/sales", "reports" to "/reports", "settings" to "/settings")) {
                                 tag("a", "href" to href, "aria-current" to if (active == key) "page" else null) { +t(r, "nav.$key") }
                             }
                         }
@@ -199,11 +212,11 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         return Res(status, h.toString().toByteArray())
     }
 
-    private fun Html.csrf(r: Req) {
+    internal fun Html.csrf(r: Req) {
         tag("input", "type" to "hidden", "name" to "csrf", "value" to r.session!!.csrf)
     }
 
-    private fun Html.field(id: String, label: String, value: String = "", type: String = "text", help: String? = null, vararg extra: Pair<String, Any?>) {
+    internal fun Html.field(id: String, label: String, value: String = "", type: String = "text", help: String? = null, vararg extra: Pair<String, Any?>) {
         tag("div") {
             tag("label", "for" to id) {
                 +label
@@ -213,7 +226,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         }
     }
 
-    private fun notFound(r: Req) = page(r, t(r, "error.notfound"), null, 404) {}
+    internal fun notFound(r: Req) = page(r, t(r, "error.notfound"), null, 404) {}
 
     private fun setLang(r: Req): Res {
         val l = r.query["l"]?.takeIf { it in I18n.LOCALES } ?: return redirect("/")
@@ -293,7 +306,8 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         return page(r, t(r, "home.title") + " · " + date(r, today), "home") {
             tag("div", "class" to "cards") {
                 for ((k, v) in listOf("home.sales" to d.sales.toString(), "home.revenue" to money(d.revenue), "home.copies" to rep.copiesInStock().toString(),
-                    "home.value" to money(rep.stockValue()), "home.sleeping" to rep.sleeping().size.toString())) {
+                    "home.value" to money(rep.stockValue()), "home.sleeping" to rep.sleeping().size.toString(),
+                    "home.ready" to shop.readyOrders().size.toString(), "home.waiting" to shop.suggestions().size.toString())) {
                     tag("div", "class" to "card") { +t(r, k); tag("b") { +v } }
                 }
             }
@@ -318,7 +332,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
             val list = shop.search(q, r.lang)
             return page(r, t(r, "books.title"), "books") {
                 searchForm(r, q)
-                tag("p") { tag("a", "class" to "button", "href" to "/books/new") { +t(r, "books.add") }; raw(" "); tag("span", "class" to "help") { +t(r, "books.count", list.size) } }
+                tag("p") { tag("a", "class" to "button", "href" to "/books/new") { +t(r, "books.add") }; raw(" "); tag("a", "class" to "button secondary", "href" to "/count") { +t(r, if (count.active) "count.resume" else "count.title") }; raw(" "); tag("span", "class" to "help") { +t(r, "books.count", list.size) } }
                 if (list.isEmpty()) tag("p") { +t(r, "books.none") } else tag("div", "class" to "tablewrap") {
                     tag("table") {
                         tag("thead") { tag("tr") {
@@ -371,7 +385,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
     }
 
     /** Runs a change; on success shows `ok` on the next page, on a refused change shows why. */
-    private fun act(r: Req, to: String, ok: String, block: () -> Unit): Res {
+    internal fun act(r: Req, to: String, ok: String, block: () -> Unit): Res {
         try {
             block()
             r.session!!.flash = true to ok
@@ -493,6 +507,32 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
                 }
                 tag("div") { tag("button", "type" to "submit", "class" to "secondary") { +t(r, "book.adjust.button") } }
             }
+            val ready = shop.readyOrders()
+            val waiting = shop.orders.values.filter { it.isbn == b.isbn && !it.closed }
+            tag("h2") { +t(r, "orders.title") }
+            if (waiting.isNotEmpty()) tag("p") {
+                +t(r, "book.orders", shop.reserved(b.isbn, ready)); raw(" ")
+                waiting.forEachIndexed { i, o -> if (i > 0) raw(", "); tag("a", "href" to "/orders/${o.id}") { +o.id } }
+            }
+            tag("p") { tag("a", "class" to "button secondary", "href" to "/orders?isbn=${b.isbn}") { +t(r, "orders.new") } }
+            if (shop.suppliers.isNotEmpty()) {
+                tag("h2") { +t(r, "book.order.supplier") }
+                tag("form", "method" to "post", "action" to "/buy/po", "class" to "row") {
+                    csrf(r)
+                    tag("input", "type" to "hidden", "name" to "isbn", "value" to b.isbn)
+                    tag("div") {
+                        tag("label", "for" to "po-qty") { +t(r, "col.qty") }
+                        tag("input", "id" to "po-qty", "name" to "qty", "type" to "number", "value" to 1, "min" to 1, "max" to 10000, "required" to true)
+                    }
+                    tag("div") {
+                        tag("label", "for" to "po-supplier") { +t(r, "buy.supplier") }
+                        tag("select", "id" to "po-supplier", "name" to "supplier") {
+                            for (sup in shop.suppliers.values) tag("option", "value" to sup.id, "selected" to (sup.id == s.lastSupplier)) { +sup.name }
+                        }
+                    }
+                    tag("div") { tag("button", "type" to "submit", "class" to "secondary") { +t(r, "buy.create") } }
+                }
+            }
         }
     }
 
@@ -514,7 +554,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
                                 isbn == null -> session.flash = false to t(r, "error.isbn")
                                 isbn !in shop.books -> return redirect("/books/new?isbn=$isbn")
                                 else -> {
-                                    val i = cart.indexOfFirst { it.kind == LineKind.BOOK && it.ref == isbn }
+                                    val i = cart.indexOfFirst { it.kind == LineKind.BOOK && it.ref == isbn && it.order == null }
                                     if (i >= 0) cart[i] = cart[i].copy(qty = cart[i].qty + 1) else cart.add(CartLine(LineKind.BOOK, isbn, 1))
                                 }
                             }
@@ -586,9 +626,9 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
                             }
                             val price = l.price ?: unit
                             tag("tr") {
-                                tag("td") { +name }
+                                tag("td") { +name; if (l.order != null) { raw(" "); tag("a", "href" to "/orders/${l.order}", "class" to "help") { +t(r, "order.title", l.order) } } }
                                 tag("td", "class" to "num") { +money(unit) }
-                                tag("td") {
+                                if (l.order != null) tag("td") { +l.qty.toString() } else tag("td") {
                                     tag("form", "method" to "post", "action" to "/sell/update", "class" to "row") {
                                         csrf(r)
                                         tag("input", "type" to "hidden", "name" to "line", "value" to i)
@@ -695,7 +735,7 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         }
     }
 
-    private fun rate(bp: Int): String = if (bp % 100 == 0) (bp / 100).toString() else "%d,%d".format(bp / 100, (bp % 100) / 10)
+    internal fun rate(bp: Int): String = if (bp % 100 == 0) (bp / 100).toString() else "%d,%d".format(bp / 100, (bp % 100) / 10)
 
     private fun reports(r: Req): Res {
         val rep = Reports(shop)
@@ -705,7 +745,18 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         val (net, cost) = rep.bookMargin(from, to)
         return page(r, t(r, "reports.title"), "reports") {
             tag("p", "class" to "help") { +t(r, "reports.verify", shop.journal.entries.size) }
-            tag("p") { tag("a", "href" to "/export/catalog.csv") { +t(r, "reports.export") } }
+            tag("p") {
+                tag("a", "href" to "/export/catalog.csv") { +t(r, "reports.export") }; raw(" · ")
+                tag("a", "href" to "/reports/day") { +t(r, "closing.title") }
+            }
+            tag("h2") { +t(r, "reports.accountant") }
+            tag("form", "method" to "get", "action" to "/export/ledger.csv", "class" to "row") {
+                field("from", t(r, "reports.from"), to.withDayOfMonth(1).toString(), "date")
+                field("to", t(r, "reports.to"), to.toString(), "date")
+                tag("div") { tag("button", "type" to "submit", "class" to "secondary") { +t(r, "reports.ledger") } }
+                tag("div") { tag("button", "type" to "submit", "class" to "secondary", "formaction" to "/export/purchases.csv") { +t(r, "reports.purchases") } }
+            }
+            tag("p", "class" to "help") { +t(r, "reports.accountant.help") }
             tag("p") { +t(r, "reports.margin", money(net), money(cost), money(net - cost)) }
             tag("h2") { +t(r, "reports.days") }
             tag("div", "class" to "tablewrap") { tag("table") {
@@ -765,6 +816,13 @@ class Web(private val shop: Shop, private val auth: Auth, private val lookup: Lo
         if (rest.isNotEmpty()) return notFound(r)
         val s = shop.settings
         return page(r, t(r, "settings.title"), "settings") {
+            tag("h2") { +t(r, "customers.title") }
+            tag("p", "class" to "help") { +t(r, "customers.help", customers.all.size) }
+            tag("form", "method" to "post", "action" to "/settings/forget") {
+                csrf(r)
+                tag("button", "type" to "submit", "class" to "secondary") { +t(r, "customers.forget") }
+            }
+            tag("h2") { +t(r, "settings.shop") }
             tag("form", "method" to "post", "action" to "/settings", "class" to "stack") {
                 csrf(r)
                 field("name", t(r, "settings.name"), s.name, extra = arrayOf("required" to true, "maxlength" to 120))

@@ -3,7 +3,7 @@ package shiori
 import java.io.File
 import kotlin.system.exitProcess
 
-const val VERSION = "0.1.0"
+const val VERSION = "0.2.0"
 
 private const val USAGE = """Shiori $VERSION, software for independent bookshops.
 
@@ -85,7 +85,7 @@ private fun serve(dir: File, opts: Map<String, String>): Int {
     val host = opts["host"] ?: "127.0.0.1"
     val port = opts["port"]?.toIntOrNull() ?: 8080
     val shop = Shop.open(dir)
-    val web = Web(shop, Auth(File(dir, "auth.json")), Lookup(enabled = "offline" !in opts)).start(host, port)
+    val web = Web(shop, Auth(File(dir, "auth.json")), Lookup(enabled = "offline" !in opts), Customers(File(dir, "customers.json")), CountDraft(File(dir, "count.json"))).start(host, port)
     opts["allow-host"]?.split(',')?.forEach { web.allowHost(it.trim()) }
     Runtime.getRuntime().addShutdownHook(Thread { web.stop(); shop.close() })
     println("Shiori is open: http://127.0.0.1:${web.port}/  (data: ${dir.absolutePath})")

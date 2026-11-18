@@ -77,6 +77,8 @@ fun domainTests() {
     test("CSV: quotes, commas and line breaks; formulas are kept as text") {
         eq(listOf(listOf("a", "b,c", "d\"e"), listOf("f\ng", "")), Csv.parse("a,\"b,c\",\"d\"\"e\"\r\n\"f\ng\",\n"))
         eq("'=SUM(A1)", Csv.cell("=SUM(A1)"))
+        eq("-12.50", Csv.cell("-12.50"))
+        eq("'-1+cmd", Csv.cell("-1+cmd"))
         eq("\"'+1,2\"", Csv.cell("+1,2"))
         eq("plain", Csv.cell("plain"))
     }

@@ -71,11 +71,11 @@ form.stack{display:grid;gap:10px;max-width:560px}label{display:block;font-weight
 input,select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--muted);border-radius:6px;background:var(--bg);color:var(--fg);width:100%}
 input[type=checkbox]{width:auto}
 button,.button{font:inherit;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);cursor:pointer;text-decoration:none;display:inline-block}
-button.secondary{background:transparent;color:var(--accent)}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.row>*{flex:1 1 140px}
+button.secondary,.button.secondary{background:transparent;color:var(--accent)}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.row>*{flex:1 1 140px}
 .inline{display:inline}.spacer{height:20px}.help{color:var(--muted);font-size:.9rem;font-weight:400}
 .msg{padding:10px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card)}.msg.error{border-color:var(--warn);color:var(--warn)}.msg.ok{border-color:var(--ok);color:var(--ok)}
 .receipt{background:#fff;color:#111;max-width:340px;padding:16px;border:1px dashed #999;font-family:ui-monospace,"Cascadia Mono","Noto Sans Mono CJK JP",monospace;font-size:.9rem}
-.receipt .r{display:flex;justify-content:space-between;gap:8px}.receipt hr{border:0;border-top:1px dashed #999}
+.receipt.wide{max-width:640px}.receipt .r{display:flex;justify-content:space-between;gap:8px}.receipt hr{border:0;border-top:1px dashed #999}
 footer{color:var(--muted);font-size:.85rem;text-align:center;padding:24px 16px}
 @media print{header,footer,.noprint{display:none}main{padding:0}.receipt{border:0}}
 """

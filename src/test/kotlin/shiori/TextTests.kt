@@ -30,8 +30,10 @@ fun textTests() {
     }
     test("every text key the code uses is defined") {
         val src = File("src/main/kotlin/shiori").listFiles()!!.filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
-        val used = Regex("\"((?:error|nav|home|books|col|book|rule|sell|sales|receipt|reports|settings|setup|login|reason|method|market)\\.[a-zA-Z.-]+)\"").findAll(src).map { it.groupValues[1] }.toSet()
-        val missing = used.filter { it !in I18n.TEXT.getValue("en") && !it.endsWith(".") }
+        val used = Regex("\"((?:error|nav|home|books|col|book|rule|sell|sales|receipt|reports|settings|setup|login|reason|method|market|order|orders|buy|supplier|po|returns|return|count|closing|customers|state)\\.[a-zA-Z.-]+)\"").findAll(src).map { it.groupValues[1] }.toSet()
+        // Journal entry types and file names share the dotted shape but are not interface texts.
+        val notText = setOf("order.notified", "order.cancel", "po.receive", "po.cancel")
+        val missing = used.filter { it !in I18n.TEXT.getValue("en") && !it.endsWith(".") && !it.endsWith(".json") && it !in notText }
         eq(emptyList<String>(), missing)
     }
     test("no tracker, CDN or remote script anywhere in the interface") {

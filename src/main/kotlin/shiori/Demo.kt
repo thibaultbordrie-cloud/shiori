@@ -78,6 +78,64 @@ object Demo {
         return body + Isbn.check13(body)
     }
 
+    private val DIRECT = setOf("Atelier Ginkgo", "Éditions Kotoba", "灯火コミックス")
+
+    private val SUPPLIERS = mapOf(
+        Market.FR to listOf("Diffusion du Phare", "Atelier Ginkgo", "Rachat d'occasion"),
+        Market.JP to listOf("東灯書籍流通", "直取引", "古書買取"),
+        Market.TW to listOf("南風圖書經銷", "出版社直營", "二手書收購"),
+        Market.KR to listOf("Mulgyeol Distribution", "Direct from publisher", "Used book buy-back"),
+    )
+
+    /** Books customers ask for that the shop does not keep: they exist only through special orders. */
+    private val SPECIAL = listOf(
+        D(mapOf("fr" to "Oiseaux de Formose", "en" to "Birds of Formosa", "zh-Hant" to "福爾摩沙的鳥"), "Lin Wen-hao", "Little Lamp", "en", "Travel", 3200, "2025-04-04"),
+        D(mapOf("ja" to "灯台守の日記", "en" to "The Lighthouse Keeper's Diary", "fr" to "Journal d'un gardien de phare"), "海野 灯", "青灯社", "ja", "Literature", 1870, "2025-10-10"),
+        D(mapOf("fr" to "Cuisiner le riz", "en" to "Cooking Rice", "ko" to "밥 짓기"), "Sophie Kim", "Éditions du Phare", "fr", "Art", 2500, "2024-03-15"),
+    )
+
+    private val CUSTOMERS = mapOf(
+        Market.FR to listOf("Camille R.", "Hugo L.", "Inès M.", "Paul D."),
+        Market.JP to listOf("さくら S.", "ゆうと T.", "みお K.", "けんじ N."),
+        Market.TW to listOf("怡君 L.", "家豪 C.", "雅婷 W.", "冠宇 H."),
+        Market.KR to listOf("Seoyeon P.", "Minjun K.", "Jiwoo L.", "Hayun C."),
+    )
+
+    /** The last two weeks: special orders through their whole life, and unsold copies sent back. */
+    private fun trade(shop: Shop, customers: Customers, clock: HandClock, market: Market, today: LocalDate, zone: ZoneId) {
+        fun at(daysAgo: Long, hour: Int) { clock.now = today.minusDays(daysAgo).atTime(hour, 15).atZone(zone).toInstant() }
+        val special = SPECIAL.mapIndexed { k, d ->
+            val i = BOOKS.size + k
+            shop.saveBook(Book(isbn(i), d.titles, listOf(d.author), d.publisher, d.lang, price(d.eur, market), Condition.NEW, LocalDate.parse(d.published), section(d.section, market)))
+            isbn(i)
+        }
+        val names = CUSTOMERS.getValue(market)
+        fun customer(n: Int) = customers.add(names[n], "0${n + 1}-0000-0000 (fictional)", "").id
+        at(14, 11)
+        val o1 = shop.placeOrder(customer(0), special[0], 1)
+        val p1 = shop.createPurchaseOrder("dist", listOf(special[0] to 2), listOf(o1.id))
+        at(10, 16)
+        val o2 = shop.placeOrder(customer(1), special[1], 1)
+        val p2 = shop.createPurchaseOrder("dist", listOf(special[1] to 1), listOf(o2.id))
+        at(8, 10)
+        shop.receivePurchaseOrder(p1.id, mapOf(special[0] to 2))
+        at(6, 15)
+        shop.sell(listOf(CartLine(LineKind.BOOK, special[0], 1, order = o1.id)), "card")
+        at(5, 18)
+        // Copies that have not sold for months go back while the distributor still takes them.
+        val back = BOOKS.indices.filter { it % 7 == 3 && !BOOKS[it].used }.map { isbn(it) }
+            .filter { shop.returnable(it, "dist") > 0 }.map { it to minOf(shop.returnable(it, "dist"), 2L) }
+        if (back.isNotEmpty()) shop.returnToSupplier("dist", back, "Unsold")
+        at(2, 10)
+        shop.receivePurchaseOrder(p2.id, mapOf(special[1] to 1))
+        at(1, 11)
+        shop.markNotified(o2.id)
+        val o3 = shop.placeOrder(customer(2), special[2], 1)
+        shop.createPurchaseOrder("direct", listOf(special[2] to 1), listOf(o3.id))
+        at(0, 10)
+        shop.placeOrder(customer(3), special[0], 2)
+    }
+
     fun create(dir: File, market: Market, today: LocalDate = LocalDate.now()) {
         require(!File(dir, "journal.jsonl").exists()) { "${dir.path} already holds a shop; choose an empty folder" }
         val zone = ZoneId.of(when (market) { Market.FR -> "Europe/Paris"; Market.JP -> "Asia/Tokyo"; Market.TW -> "Asia/Taipei"; Market.KR -> "Asia/Seoul" })
@@ -99,13 +157,19 @@ object Demo {
             val cafeEur = mapOf("coffee" to 300, "tea" to 350, "cake" to 450)
             for ((id, n) in names) shop.saveProduct(Product(id, n, price(cafeEur.getValue(id), market)))
 
+            val sup = SUPPLIERS.getValue(market)
+            shop.saveSupplier(Supplier("dist", sup[0], if (market == Market.JP) 2200 else 3500, true, 0, "account 000-0000 (fictional)"))
+            shop.saveSupplier(Supplier("direct", sup[1], 3000, true, 180, ""))
+            shop.saveSupplier(Supplier("buyback", sup[2], 7500, false, 0, ""))
+            fun supplierOf(d: D) = if (d.used) "buyback" else if (d.publisher in DIRECT) "direct" else "dist"
+
             val rnd = Random(2027)
             BOOKS.forEachIndexed { i, d ->
                 val p = price(d.eur, market)
                 shop.saveBook(Book(isbn(i), d.titles, listOf(d.author), d.publisher, d.lang, p,
                     if (d.used) Condition.USED else Condition.NEW, LocalDate.parse(d.published), section(d.section, market)))
                 // Publishers deliver at about 60 % of the price; second-hand books are bought for about 25 %.
-                shop.receive(isbn(i), (2 + rnd.nextInt(5)).toLong(), p * (if (d.used) 25 else 60) / 100, if (d.used) "Buy-back" else d.publisher)
+                shop.receive(isbn(i), (2 + rnd.nextInt(5)).toLong(), p * (if (d.used) 25 else 60) / 100, supplierOf(d))
             }
             // Eight months of trade, quieter at first; a restock when a title runs low.
             for (day in 0 until 240) {
@@ -123,9 +187,10 @@ object Demo {
                 clock.now = date.atTime(19, 30).atZone(zone).toInstant()
                 for (i in BOOKS.indices) {
                     val s = shop.stock[isbn(i)] ?: continue
-                    if (s.qty <= 0 && i % 5 != 4) shop.receive(isbn(i), 3, price(BOOKS[i].eur, market) * (if (BOOKS[i].used) 25 else 60) / 100, BOOKS[i].publisher)
+                    if (s.qty <= 0 && i % 5 != 4) shop.receive(isbn(i), 3, price(BOOKS[i].eur, market) * (if (BOOKS[i].used) 25 else 60) / 100, supplierOf(BOOKS[i]))
                 }
             }
+            trade(shop, Customers(File(dir, "customers.json"), clock), clock, market, today, zone)
         }
     }
 }

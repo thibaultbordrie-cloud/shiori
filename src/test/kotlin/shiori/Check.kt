@@ -51,6 +51,7 @@ fun main() {
     domainTests()
     journalTests()
     shopTests()
+    tradeTests()
     textTests()
     webTests()
     exitProcess(Check.report())

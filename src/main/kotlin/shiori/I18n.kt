@@ -26,7 +26,9 @@ object I18n {
         return "en"
     }
 
-    val TEXT: Map<String, Map<String, String>> = mapOf(
+    val TEXT: Map<String, Map<String, String>> by lazy { LOCALES.associateWith { BASE.getValue(it) + TRADE_TEXT.getValue(it) } }
+
+    private val BASE: Map<String, Map<String, String>> = mapOf(
         "en" to mapOf(
             "app.tagline" to "Software for independent bookshops",
             "nav.home" to "Today", "nav.books" to "Books", "nav.sell" to "Sell", "nav.sales" to "Sales",

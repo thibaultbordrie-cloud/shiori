@@ -52,7 +52,7 @@ fun webTests() {
         start()
     }
     val authClock = HandClock(java.time.Instant.now())
-    val web = Web(shop, Auth(File(dir, "auth.json"), authClock, iterations = 1000), Lookup("http://127.0.0.1:${fake.address.port}")).start("127.0.0.1", 0)
+    val web = Web(shop, Auth(File(dir, "auth.json"), authClock, iterations = 1000), Lookup("http://127.0.0.1:${fake.address.port}"), Customers(File(dir, "customers.json")), CountDraft(File(dir, "count.json"))).start("127.0.0.1", 0)
     val base = "http://127.0.0.1:${web.port}"
     val pass = "correct horse battery"
     try {
@@ -131,6 +131,58 @@ fun webTests() {
             b.post("/books", mapOf("csrf" to csrf, "isbn" to "9780000000002", "title_en" to "<script>alert(1)</script>", "language" to "en", "price" to "10", "condition" to "NEW"))
             val list = b.get("/books").body()
             ok(!list.contains("<script>alert(1)</script>") && list.contains("&lt;script&gt;"), "escaped")
+        }
+        test("a customer order through the web: ordered, received, set aside, handed over, then the customer is forgotten") {
+            val csrf = b.token(b.get("/orders").body(), "csrf")
+            val isbn = "9780306406157"
+            b.post("/buy/suppliers", mapOf("csrf" to csrf, "id" to "atelier", "sname" to "Atelier Ginkgo", "discount" to "35", "returnable" to "1", "days" to "0", "contact" to ""))
+            eq(3500, shop.suppliers.getValue("atelier").discountBp)
+            val have = shop.stock.getValue(isbn).qty
+            val placed = b.post("/orders", mapOf("csrf" to csrf, "isbn" to isbn, "qty" to (have + 1).toString(), "name" to "Aiko Example", "contact" to "06 00 00 00 00"))
+            val orderUrl = placed.headers().firstValue("Location").get()
+            val id = orderUrl.substringAfterLast('/')
+            ok(b.get(orderUrl).body().contains("Aiko Example"), "the order page shows the customer")
+            ok(!File(dir, "journal.jsonl").readText().contains("Aiko"), "the name is not in the journal")
+            ok(b.get("/buy").body().contains(id), "suggested for the waiting customer")
+            val po = b.post("/buy/po", mapOf("csrf" to csrf, "q_$isbn" to "1", "s_$isbn" to "atelier")).headers().firstValue("Location").get()
+            eq(OrderState.ORDERED, shop.orderState(shop.orders.getValue(id)))
+            b.post("$po/receive", mapOf("csrf" to csrf, "r_$isbn" to "1"))
+            eq(OrderState.READY, shop.orderState(shop.orders.getValue(id)))
+            b.post("/sell/add", mapOf("csrf" to csrf, "isbn" to isbn))
+            b.post("/sell/checkout", mapOf("csrf" to csrf, "method" to "cash"))
+            ok(b.get("/sell").body().contains(Html.esc("Pas assez d'exemplaires")), "a walk-in cannot take the copies set aside")
+            b.post("/sell/clear", mapOf("csrf" to csrf))
+            eq("/sell", b.post("$orderUrl/collect", mapOf("csrf" to csrf)).headers().firstValue("Location").get())
+            val done = b.post("/sell/checkout", mapOf("csrf" to csrf, "method" to "card"))
+            ok(done.headers().firstValue("Location").get().startsWith("/sales/"), "sold")
+            eq(OrderState.COLLECTED, shop.orderState(shop.orders.getValue(id)))
+            b.post("$orderUrl/forget", mapOf("csrf" to csrf))
+            ok(!b.get(orderUrl).body().contains("Aiko"), "forgotten")
+        }
+        test("a stock count with a barcode scanner: the field keeps the focus, nothing changes until applied") {
+            val csrf = b.token(b.get("/count").body(), "csrf")
+            b.post("/count/start", mapOf("csrf" to csrf, "section" to "Art"))
+            val page = b.get("/count").body()
+            ok(Regex("<input id=\"code\"[^>]*autofocus").containsMatchIn(page), "scan field has the focus")
+            val before = shop.journal.entries.size
+            repeat(2) { b.post("/count/scan", mapOf("csrf" to csrf, "code" to "978-0-306-40615-7")) }
+            b.post("/count/scan", mapOf("csrf" to csrf, "code" to "123"))
+            eq(before, shop.journal.entries.size, "scans are a draft")
+            ok(b.get("/count/review").body().contains("Paper Gardens") || b.get("/count/review").body().contains("Les Jardins de papier"), "review lists the book")
+            b.post("/count/apply", mapOf("csrf" to csrf))
+            eq(2L, shop.stock.getValue("9780306406157").qty)
+            eq("count", shop.journal.entries.last().type)
+        }
+        test("the accountant's files: sales ledger with refunds on their own day, purchases, end of day") {
+            val csrf = b.token(b.get("/sales").body(), "csrf")
+            val last = shop.sales.last()
+            b.post("/sales/${last.id}/refund", mapOf("csrf" to csrf, "reason" to "test"))
+            val day = java.time.LocalDate.now(java.time.ZoneId.of("Europe/Paris"))
+            val ledger = b.get("/export/ledger.csv?from=$day&to=$day")
+            ok(ledger.headers().firstValue("Content-Type").get().startsWith("text/csv"), "csv")
+            ok(ledger.body().contains(",refund,${last.id},card,5.50,-"), "negative refund line")
+            ok(b.get("/export/purchases.csv?from=$day&to=$day").body().contains("delivery"), "purchases")
+            eq(200, b.get("/reports/day").statusCode())
         }
         test("the language switch only redirects inside Shiori") {
             eq("/", b.get("/lang?l=ja&back=//evil.example").headers().firstValue("Location").get())

@@ -41,6 +41,22 @@ All shelf prices are tax-inclusive, as customers see them in all four countries.
 - **Café**: VAT 10 %.
 - The interface has no Korean translation yet; Korean shops use it in English. Book titles in Korean are supported and searchable.
 
+## Returns to suppliers
+
+Whether unsold copies may go back, and for how long, is a matter of each shop's agreement with each supplier, not of law: in France, the terms of the distributor (*retours*, often after a minimum period and within a limit); in Japan, books on consignment (委託) can be returned within the agreed period while firm orders (買切) cannot; in Taiwan, consignment (寄售) is common. Shiori does not guess: for each supplier the shop says whether returns are accepted and within how many days of the last delivery (0 = no limit agreed). Shiori then refuses a return to another supplier than the one who delivered, beyond the copies delivered, after the window, or of copies set aside for a customer. The credit shown is the last cost paid to that supplier; the supplier's credit note is what counts.
+
+## Customers' personal data
+
+A customer order needs a name and a way to say the book has arrived. Shiori keeps them in `customers.json`, apart from the journal, and the journal holds only a customer number. The shop can erase one customer, or every customer with no open order, at any time. This follows the principles of data minimisation and erasure found in the GDPR (France, articles 5 and 17), the APPI (Japan), the Personal Data Protection Act (Taiwan) and PIPA (South Korea). The shop remains responsible for telling customers what it keeps and why.
+
+## The accountant's files
+
+- **Sales ledger (CSV)**: one row per receipt and tax rate, with the gross amount, the tax and the net. A refund is a negative row on the day of the refund, so a day already closed never changes.
+- **Purchases and returns (CSV)**: deliveries at their cost and returns at the credit due, by supplier.
+- **End of day**: totals by payment method and by rate, refunds included, and the cash expected in the drawer.
+
+These files help an accountant; they are **not** the French FEC (fichier des écritures comptables), not a certified cash-register archive, and not Japan's electronic bookkeeping storage (電子帳簿保存法) as such.
+
 ## Sources
 
 - France: [Loi n° 81-766 (Légifrance)](https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000517179); [Prix du livre, marges et TVA à 5,5 % en 2026](https://hayot-expertise.fr/blog/librairie-prix-unique-livre-marges-tva); [Question écrite n° 17396, Assemblée nationale](https://questions.assemblee-nationale.fr/q17/17-17396QE.htm).
