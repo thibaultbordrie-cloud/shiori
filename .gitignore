@@ -1,0 +1,8 @@
+/build/
+/shiori-data/
+*.jsonl.lock
+.env
+secrets.env
+*.local
+.idea/
+*.iml
